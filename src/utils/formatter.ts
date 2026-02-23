@@ -33,16 +33,16 @@ export class Formatter {
     return `${input.slice(0, maxLength - 1)}…`
   }
 
-  public formatCategoryLabel(category: string | null): string {
-    if (!category) {
+  public formatCategoryLabel(categories: string[]): string {
+    if (categories.length === 0) {
       return "не обрано"
     }
 
-    if (category === ALL_CATEGORIES_VALUE) {
+    if (categories.includes(ALL_CATEGORIES_VALUE)) {
       return ALL_CATEGORIES_LABEL
     }
 
-    return category
+    return categories.join(", ")
   }
 
   public expLabel(level: ExpLevelId): string {

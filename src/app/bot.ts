@@ -7,6 +7,7 @@ import { Formatter, Logger } from "@/utils"
 import {
   ALL_CATEGORIES_LABEL,
   ALL_CATEGORIES_VALUE,
+  CATEGORY_PAGE_SIZE,
   DJINNI_CATEGORIES,
   EXP_LEVELS,
   type ExpLevelId
@@ -19,11 +20,18 @@ interface BotAppDependencies {
   rssFeedService: RssFeedService
   formatter: Formatter
   pollIntervalMs: number
-  categoryPageSize: number
+}
+
+interface CategoryPageState {
+  totalPages: number
+  currentPage: number
+  start: number
+  end: number
 }
 
 export class BotApp {
   private readonly expDrafts = new Map<number, Set<ExpLevelId>>()
+  private readonly categoryDrafts = new Map<number, Set<string>>()
   private pollIsRunning = false
 
   private readonly bot: Bot
@@ -32,7 +40,6 @@ export class BotApp {
   private readonly rssFeedService: RssFeedService
   private readonly formatter: Formatter
   private readonly pollIntervalMs: number
-  private readonly categoryPageSize: number
 
   public constructor({
     bot,
@@ -40,8 +47,7 @@ export class BotApp {
     settingsRepository,
     rssFeedService,
     formatter,
-    pollIntervalMs,
-    categoryPageSize
+    pollIntervalMs
   }: BotAppDependencies) {
     this.bot = bot
     this.logger = logger
@@ -49,7 +55,6 @@ export class BotApp {
     this.rssFeedService = rssFeedService
     this.formatter = formatter
     this.pollIntervalMs = pollIntervalMs
-    this.categoryPageSize = categoryPageSize
   }
 
   public start(): void {
@@ -70,247 +75,352 @@ export class BotApp {
   }
 
   private registerHandlers(): void {
-    this.bot.command("start", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        return
-      }
+    this.registerCommandHandlers()
+    this.registerSettingsCallbacks()
+    this.registerCategoryCallbacks()
+    this.registerExpCallbacks()
+    this.registerTextFallbackHandler()
+  }
 
-      this.settingsRepository.ensureUser(chatId)
+  private registerCommandHandlers(): void {
+    this.bot.command("start", (ctx) => this.handleStartCommand(ctx))
+    this.bot.command("settings", (ctx) => this.handleSettingsCommand(ctx))
+  }
 
-      if (!this.hasFullSettings(chatId)) {
-        await ctx.reply(
-          "Привіт! Я парсю Djinni RSS та надсилаю нові вакансії. Почнемо з вибору категорії.",
-          { reply_markup: new InlineKeyboard().text("Оберіть категорію", "cat:open") }
-        )
-        return
-      }
+  private registerSettingsCallbacks(): void {
+    this.bot.callbackQuery("noop", (ctx) => ctx.answerCallbackQuery())
+    this.bot.callbackQuery("menu:settings", (ctx) => this.handleSettingsMenu(ctx))
+    this.bot.callbackQuery("settings:toggle", (ctx) => this.handleSettingsToggle(ctx))
+    this.bot.callbackQuery("poll:now", (ctx) => this.handlePollNow(ctx))
+  }
 
-      await this.renderSettings(ctx, true)
-    })
+  private registerCategoryCallbacks(): void {
+    this.bot.callbackQuery("cat:open", (ctx) => this.handleCategoryOpen(ctx))
+    this.bot.callbackQuery(/^cat:page:(\d+)$/, (ctx) => this.handleCategoryPage(ctx))
+    this.bot.callbackQuery("cat:set_all", (ctx) => this.handleCategorySetAll(ctx))
+    this.bot.callbackQuery(/^cat:set:(\d+)$/, (ctx) => this.handleCategorySet(ctx))
+    this.bot.callbackQuery("cat:clear", (ctx) => this.handleCategoryClear(ctx))
+    this.bot.callbackQuery("cat:save", (ctx) => this.handleCategorySave(ctx))
+  }
 
-    this.bot.command("settings", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        return
-      }
+  private registerExpCallbacks(): void {
+    this.bot.callbackQuery("exp:open", (ctx) => this.handleExpOpen(ctx))
+    this.bot.callbackQuery(/^exp:toggle:(.+)$/, (ctx) => this.handleExpToggle(ctx))
+    this.bot.callbackQuery("exp:all", (ctx) => this.handleExpSetAll(ctx))
+    this.bot.callbackQuery("exp:none", (ctx) => this.handleExpClear(ctx))
+    this.bot.callbackQuery("exp:save", (ctx) => this.handleExpSave(ctx))
+  }
 
-      this.settingsRepository.ensureUser(chatId)
-      await this.renderSettings(ctx, true)
-    })
+  private registerTextFallbackHandler(): void {
+    this.bot.on("message:text", (ctx) => this.handleTextMessage(ctx))
+  }
 
-    this.bot.callbackQuery("noop", async (ctx) => {
-      await ctx.answerCallbackQuery()
-    })
+  private async handleStartCommand(ctx: Context): Promise<void> {
+    const chatId = this.getChatId(ctx)
+    if (!chatId) {
+      return
+    }
 
-    this.bot.callbackQuery("menu:settings", async (ctx) => {
-      await ctx.answerCallbackQuery()
-      await this.renderSettings(ctx)
-    })
+    this.settingsRepository.ensureUser(chatId)
 
-    this.bot.callbackQuery("settings:toggle", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      this.settingsRepository.ensureUser(chatId)
-      const user = this.settingsRepository.getUser(chatId)
-      const next = !(user?.isActive ?? true)
-      this.settingsRepository.setUserActive(chatId, next)
-
-      await ctx.answerCallbackQuery({
-        text: next ? "Сповіщення увімкнено" : "Сповіщення на паузі"
-      })
-      await this.renderSettings(ctx)
-    })
-
-    this.bot.callbackQuery("poll:now", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      if (!this.hasFullSettings(chatId)) {
-        await ctx.answerCallbackQuery({
-          text: "Спочатку оберіть категорію",
-          show_alert: true
-        })
-        return
-      }
-
-      await ctx.answerCallbackQuery({ text: "Перевіряю RSS..." })
-
-      try {
-        const sentCount = await this.processUserFeed(chatId)
-        await ctx.reply(
-          sentCount > 0 ? `Надіслано вакансій: ${sentCount}` : "Нових вакансій поки немає."
-        )
-      } catch {
-        await ctx.reply("Не вдалося отримати RSS. Спробуйте ще раз пізніше.")
-      }
-    })
-
-    this.bot.callbackQuery("cat:open", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      this.settingsRepository.ensureUser(chatId)
-      await ctx.answerCallbackQuery()
-      await this.renderCategoryPicker(ctx, 0)
-    })
-
-    this.bot.callbackQuery(/^cat:page:(\d+)$/, async (ctx) => {
-      const page = Number.parseInt(String(ctx.match[1]), 10)
-
-      await ctx.answerCallbackQuery()
-      await this.renderCategoryPicker(ctx, page)
-    })
-
-    this.bot.callbackQuery("cat:set_all", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      this.settingsRepository.saveCategory(chatId, ALL_CATEGORIES_VALUE)
-      await ctx.answerCallbackQuery({ text: `Категорія: ${ALL_CATEGORIES_LABEL}` })
-
-      await this.refreshLastPublication(chatId)
-      await this.renderSettings(ctx)
-    })
-
-    this.bot.callbackQuery(/^cat:set:(\d+)$/, async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      const index = Number.parseInt(ctx.match[1], 10)
-      const category = DJINNI_CATEGORIES[index]
-      if (!category) {
-        await ctx.answerCallbackQuery({
-          text: "Категорію не знайдено",
-          show_alert: true
-        })
-        return
-      }
-
-      this.settingsRepository.saveCategory(chatId, category)
-      await ctx.answerCallbackQuery({
-        text: `Категорія: ${this.formatter.formatCategoryLabel(category)}`
-      })
-
-      await this.refreshLastPublication(chatId)
-      await this.renderSettings(ctx)
-    })
-
-    this.bot.callbackQuery("exp:open", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      this.settingsRepository.ensureUser(chatId)
-      this.expDrafts.set(chatId, new Set(this.settingsRepository.getUser(chatId)?.expLevels ?? []))
-
-      await ctx.answerCallbackQuery()
-      await this.renderExpPicker(ctx)
-    })
-
-    this.bot.callbackQuery(/^exp:toggle:(.+)$/, async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      const level = ctx.match[1] as ExpLevelId
-      if (!EXP_LEVELS.some((item) => item.id === level)) {
-        await ctx.answerCallbackQuery({
-          text: "Невідомий тип досвіду",
-          show_alert: true
-        })
-        return
-      }
-
-      const draft = this.getDraft(chatId)
-      if (draft.has(level)) {
-        draft.delete(level)
-      } else {
-        draft.add(level)
-      }
-
-      await ctx.answerCallbackQuery()
-      await this.renderExpPicker(ctx)
-    })
-
-    this.bot.callbackQuery("exp:all", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      const draft = this.getDraft(chatId)
-      draft.clear()
-      for (const level of EXP_LEVELS) {
-        draft.add(level.id)
-      }
-
-      await ctx.answerCallbackQuery({ text: "Вибрано всі значення" })
-      await this.renderExpPicker(ctx)
-    })
-
-    this.bot.callbackQuery("exp:none", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      const draft = this.getDraft(chatId)
-      draft.clear()
-
-      await ctx.answerCallbackQuery({ text: "Вибір очищено" })
-      await this.renderExpPicker(ctx)
-    })
-
-    this.bot.callbackQuery("exp:save", async (ctx) => {
-      const chatId = ctx.chat?.id
-      if (!chatId) {
-        await ctx.answerCallbackQuery()
-        return
-      }
-
-      const draft = this.sortExpLevels(this.getDraft(chatId))
-      this.settingsRepository.saveExpLevels(chatId, draft)
-      this.expDrafts.delete(chatId)
-
-      if (this.hasFullSettings(chatId)) {
-        await this.refreshLastPublication(chatId)
-      }
-
-      await ctx.answerCallbackQuery({
-        text: draft.length > 0 ? "Налаштування досвіду збережено" : "Фільтр досвіду вимкнено"
-      })
-      await this.renderSettings(ctx)
-    })
-
-    this.bot.on("message:text", async (ctx) => {
+    if (!this.hasFullSettings(chatId)) {
       await ctx.reply(
-        "Доступні команди:\n/start - старт і швидке налаштування\n/settings - змінити категорію/досвід",
-        { reply_markup: this.buildSettingsKeyboard(ctx.chat.id) }
+        "Привіт! Я парсю Djinni RSS та надсилаю нові вакансії. Почнемо з вибору категорії.",
+        { reply_markup: new InlineKeyboard().text("Оберіть категорію", "cat:open") }
       )
+      return
+    }
+
+    await this.renderSettings(ctx, true)
+  }
+
+  private async handleSettingsCommand(ctx: Context): Promise<void> {
+    const chatId = this.getChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    this.settingsRepository.ensureUser(chatId)
+    await this.renderSettings(ctx, true)
+  }
+
+  private async handleSettingsMenu(ctx: Context): Promise<void> {
+    await ctx.answerCallbackQuery()
+    await this.renderSettings(ctx)
+  }
+
+  private async handleSettingsToggle(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    this.settingsRepository.ensureUser(chatId)
+    const user = this.settingsRepository.getUser(chatId)
+    const next = !(user?.isActive ?? true)
+    this.settingsRepository.setUserActive(chatId, next)
+
+    await ctx.answerCallbackQuery({
+      text: next ? "Сповіщення увімкнено" : "Сповіщення на паузі"
     })
+    await this.renderSettings(ctx)
+  }
+
+  private async handlePollNow(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    if (!this.hasFullSettings(chatId)) {
+      await ctx.answerCallbackQuery({
+        text: "Спочатку оберіть категорію",
+        show_alert: true
+      })
+      return
+    }
+
+    await ctx.answerCallbackQuery({ text: "Перевіряю RSS..." })
+
+    try {
+      const sentCount = await this.processUserFeed(chatId)
+      await ctx.reply(
+        sentCount > 0 ? `Надіслано вакансій: ${sentCount}` : "Нових вакансій поки немає."
+      )
+    } catch {
+      await ctx.reply("Не вдалося отримати RSS. Спробуйте ще раз пізніше.")
+    }
+  }
+
+  private async handleCategoryOpen(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    this.settingsRepository.ensureUser(chatId)
+    this.categoryDrafts.set(
+      chatId,
+      new Set(this.sortCategories(this.settingsRepository.getUser(chatId)?.categories ?? []))
+    )
+
+    await ctx.answerCallbackQuery()
+    await this.renderCategoryPicker(ctx, 0)
+  }
+
+  private async handleCategoryPage(ctx: Context): Promise<void> {
+    const data = ctx.callbackQuery?.data ?? ""
+    const match = data.match(/^cat:page:(\d+)$/)
+    if (!match) {
+      await ctx.answerCallbackQuery()
+      return
+    }
+
+    const page = Number.parseInt(match[1], 10)
+    await ctx.answerCallbackQuery()
+    await this.renderCategoryPicker(ctx, page)
+  }
+
+  private async handleCategorySetAll(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const draft = this.getCategoryDraft(chatId)
+    draft.clear()
+    draft.add(ALL_CATEGORIES_VALUE)
+
+    await ctx.answerCallbackQuery({ text: `Вибрано: ${ALL_CATEGORIES_LABEL}` })
+    await this.renderCategoryPicker(ctx, this.getCurrentCategoryPage(ctx))
+  }
+
+  private async handleCategorySet(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const data = ctx.callbackQuery?.data ?? ""
+    const match = data.match(/^cat:set:(\d+)$/)
+    if (!match) {
+      await ctx.answerCallbackQuery({
+        text: "Категорію не знайдено",
+        show_alert: true
+      })
+      return
+    }
+
+    const index = Number.parseInt(match[1], 10)
+    const category = DJINNI_CATEGORIES[index]
+    if (!category) {
+      await ctx.answerCallbackQuery({
+        text: "Категорію не знайдено",
+        show_alert: true
+      })
+      return
+    }
+
+    const draft = this.getCategoryDraft(chatId)
+    if (draft.has(ALL_CATEGORIES_VALUE)) {
+      draft.delete(ALL_CATEGORIES_VALUE)
+    }
+
+    const added = !draft.has(category)
+    if (added) {
+      draft.add(category)
+    } else {
+      draft.delete(category)
+    }
+
+    await ctx.answerCallbackQuery({
+      text: added ? `Додано: ${category}` : `Прибрано: ${category}`
+    })
+
+    await this.renderCategoryPicker(ctx, this.getPageByCategoryIndex(index))
+  }
+
+  private async handleCategoryClear(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const draft = this.getCategoryDraft(chatId)
+    draft.clear()
+
+    await ctx.answerCallbackQuery({ text: "Вибір очищено" })
+    await this.renderCategoryPicker(ctx, this.getCurrentCategoryPage(ctx))
+  }
+
+  private async handleCategorySave(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const categories = this.sortCategories(this.getCategoryDraft(chatId))
+    this.settingsRepository.saveCategories(chatId, categories)
+    this.categoryDrafts.delete(chatId)
+
+    if (this.hasFullSettings(chatId)) {
+      await this.refreshLastPublication(chatId)
+    }
+
+    await ctx.answerCallbackQuery({
+      text: categories.length > 0 ? "Категорії збережено" : "Фільтр категорій очищено"
+    })
+    await this.renderSettings(ctx)
+  }
+
+  private async handleExpOpen(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    this.settingsRepository.ensureUser(chatId)
+    this.expDrafts.set(chatId, new Set(this.settingsRepository.getUser(chatId)?.expLevels ?? []))
+
+    await ctx.answerCallbackQuery()
+    await this.renderExpPicker(ctx)
+  }
+
+  private async handleExpToggle(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const data = ctx.callbackQuery?.data ?? ""
+    const match = data.match(/^exp:toggle:(.+)$/)
+    if (!match) {
+      await ctx.answerCallbackQuery({
+        text: "Невідомий тип досвіду",
+        show_alert: true
+      })
+      return
+    }
+
+    const level = match[1]
+    if (!this.isKnownExpLevel(level)) {
+      await ctx.answerCallbackQuery({
+        text: "Невідомий тип досвіду",
+        show_alert: true
+      })
+      return
+    }
+
+    const draft = this.getExpDraft(chatId)
+    if (draft.has(level)) {
+      draft.delete(level)
+    } else {
+      draft.add(level)
+    }
+
+    await ctx.answerCallbackQuery()
+    await this.renderExpPicker(ctx)
+  }
+
+  private async handleExpSetAll(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const draft = this.getExpDraft(chatId)
+    draft.clear()
+    for (const level of EXP_LEVELS) {
+      draft.add(level.id)
+    }
+
+    await ctx.answerCallbackQuery({ text: "Вибрано всі значення" })
+    await this.renderExpPicker(ctx)
+  }
+
+  private async handleExpClear(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const draft = this.getExpDraft(chatId)
+    draft.clear()
+
+    await ctx.answerCallbackQuery({ text: "Вибір очищено" })
+    await this.renderExpPicker(ctx)
+  }
+
+  private async handleExpSave(ctx: Context): Promise<void> {
+    const chatId = await this.getCallbackChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    const draft = this.sortExpLevels(this.getExpDraft(chatId))
+    this.settingsRepository.saveExpLevels(chatId, draft)
+    this.expDrafts.delete(chatId)
+
+    if (this.hasFullSettings(chatId)) {
+      await this.refreshLastPublication(chatId)
+    }
+
+    await ctx.answerCallbackQuery({
+      text: draft.length > 0 ? "Налаштування досвіду збережено" : "Фільтр досвіду вимкнено"
+    })
+    await this.renderSettings(ctx)
+  }
+
+  private async handleTextMessage(ctx: Context): Promise<void> {
+    const chatId = this.getChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    await ctx.reply(
+      "Доступні команди:\n/start - старт і швидке налаштування\n/settings - змінити категорію/досвід",
+      { reply_markup: this.buildSettingsKeyboard(chatId) }
+    )
   }
 
   private registerErrorHandler(): void {
@@ -337,20 +447,48 @@ export class BotApp {
     return link.trim().replace(/\/$/, "")
   }
 
+  private getChatId(ctx: Context): number | null {
+    return ctx.chat?.id ?? null
+  }
+
+  private async getCallbackChatId(ctx: Context): Promise<number | null> {
+    const chatId = this.getChatId(ctx)
+    if (!chatId) {
+      await ctx.answerCallbackQuery()
+      return null
+    }
+
+    return chatId
+  }
+
+  private isKnownExpLevel(level: string): level is ExpLevelId {
+    return EXP_LEVELS.some((item) => item.id === level)
+  }
+
+  private isMessageNotModified(error: unknown): boolean {
+    return error instanceof GrammyError && error.description.includes("message is not modified")
+  }
+
   private sortExpLevels(levels: Iterable<ExpLevelId>): ExpLevelId[] {
     const set = new Set(levels)
     return EXP_LEVELS.map((item) => item.id).filter((id) => set.has(id))
   }
 
-  private categoryForRss(category: string | null): string | null {
-    if (!category || category === ALL_CATEGORIES_VALUE) {
-      return null
+  private sortCategories(categories: Iterable<string>): string[] {
+    const set = new Set(
+      Array.from(categories)
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+
+    if (set.has(ALL_CATEGORIES_VALUE)) {
+      return [ALL_CATEGORIES_VALUE]
     }
 
-    return category
+    return DJINNI_CATEGORIES.filter((category) => set.has(category))
   }
 
-  private getDraft(chatId: number): Set<ExpLevelId> {
+  private getExpDraft(chatId: number): Set<ExpLevelId> {
     const current = this.expDrafts.get(chatId)
     if (current) {
       return current
@@ -362,9 +500,41 @@ export class BotApp {
     return seed
   }
 
+  private getCategoryDraft(chatId: number): Set<string> {
+    const current = this.categoryDrafts.get(chatId)
+    if (current) {
+      return current
+    }
+
+    const user = this.settingsRepository.getUser(chatId)
+    const seed = new Set<string>(this.sortCategories(user?.categories ?? []))
+    this.categoryDrafts.set(chatId, seed)
+    return seed
+  }
+
   private hasFullSettings(chatId: number): boolean {
     const user = this.settingsRepository.getUser(chatId)
-    return Boolean(user?.category)
+    return Boolean(user && user.categories.length > 0)
+  }
+
+  private getPageByCategoryIndex(index: number): number {
+    return Math.floor(index / CATEGORY_PAGE_SIZE)
+  }
+
+  private getCurrentCategoryPage(ctx: Context): number {
+    const data = ctx.callbackQuery?.data ?? ""
+
+    const pageMatch = data.match(/^cat:page:(\d+)$/)
+    if (pageMatch) {
+      return Number.parseInt(pageMatch[1], 10)
+    }
+
+    const setMatch = data.match(/^cat:set:(\d+)$/)
+    if (setMatch) {
+      return this.getPageByCategoryIndex(Number.parseInt(setMatch[1], 10))
+    }
+
+    return 0
   }
 
   private getLatestLink(jobs: DjinniJob[]): string | null {
@@ -372,15 +542,22 @@ export class BotApp {
     return link ? this.normalizeLink(link) : null
   }
 
-  private async renderSettings(ctx: Context, forceReply = false): Promise<void> {
-    const chatId = ctx.chat?.id
-    if (!chatId) {
-      return
-    }
+  private getCategoryPageState(page: number): CategoryPageState {
+    const totalPages = Math.max(Math.ceil(DJINNI_CATEGORIES.length / CATEGORY_PAGE_SIZE), 1)
+    const currentPage = Math.min(Math.max(page, 0), totalPages - 1)
 
-    const text = this.buildSettingsText(chatId)
-    const keyboard = this.buildSettingsKeyboard(chatId)
+    const start = currentPage * CATEGORY_PAGE_SIZE
+    const end = Math.min(start + CATEGORY_PAGE_SIZE, DJINNI_CATEGORIES.length)
 
+    return { totalPages, currentPage, start, end }
+  }
+
+  private async renderInteractiveMessage(
+    ctx: Context,
+    text: string,
+    keyboard: InlineKeyboard,
+    forceReply = false
+  ): Promise<void> {
     if (!forceReply && ctx.callbackQuery?.message) {
       try {
         await ctx.editMessageText(text, {
@@ -389,7 +566,7 @@ export class BotApp {
         })
         return
       } catch (error) {
-        if (error instanceof GrammyError && error.description.includes("message is not modified")) {
+        if (this.isMessageNotModified(error)) {
           return
         }
       }
@@ -399,6 +576,20 @@ export class BotApp {
       parse_mode: "HTML",
       reply_markup: keyboard
     })
+  }
+
+  private async renderSettings(ctx: Context, forceReply = false): Promise<void> {
+    const chatId = this.getChatId(ctx)
+    if (!chatId) {
+      return
+    }
+
+    await this.renderInteractiveMessage(
+      ctx,
+      this.buildSettingsText(chatId),
+      this.buildSettingsKeyboard(chatId),
+      forceReply
+    )
   }
 
   private async renderCategoryPicker(
@@ -406,61 +597,31 @@ export class BotApp {
     page: number,
     forceReply = false
   ): Promise<void> {
-    const chatId = ctx.chat?.id
+    const chatId = this.getChatId(ctx)
     if (!chatId) {
       return
     }
 
-    const text = this.buildCategoryText(page, chatId)
-    const keyboard = this.buildCategoryKeyboard(page, chatId)
-
-    if (!forceReply && ctx.callbackQuery?.message) {
-      try {
-        await ctx.editMessageText(text, {
-          parse_mode: "HTML",
-          reply_markup: keyboard
-        })
-        return
-      } catch (error) {
-        if (error instanceof GrammyError && error.description.includes("message is not modified")) {
-          return
-        }
-      }
-    }
-
-    await ctx.reply(text, {
-      parse_mode: "HTML",
-      reply_markup: keyboard
-    })
+    await this.renderInteractiveMessage(
+      ctx,
+      this.buildCategoryText(page, chatId),
+      this.buildCategoryKeyboard(page, chatId),
+      forceReply
+    )
   }
 
   private async renderExpPicker(ctx: Context, forceReply = false): Promise<void> {
-    const chatId = ctx.chat?.id
+    const chatId = this.getChatId(ctx)
     if (!chatId) {
       return
     }
 
-    const text = this.buildExpText(chatId)
-    const keyboard = this.buildExpKeyboard(chatId)
-
-    if (!forceReply && ctx.callbackQuery?.message) {
-      try {
-        await ctx.editMessageText(text, {
-          parse_mode: "HTML",
-          reply_markup: keyboard
-        })
-        return
-      } catch (error) {
-        if (error instanceof GrammyError && error.description.includes("message is not modified")) {
-          return
-        }
-      }
-    }
-
-    await ctx.reply(text, {
-      parse_mode: "HTML",
-      reply_markup: keyboard
-    })
+    await this.renderInteractiveMessage(
+      ctx,
+      this.buildExpText(chatId),
+      this.buildExpKeyboard(chatId),
+      forceReply
+    )
   }
 
   private buildSettingsText(chatId: number): string {
@@ -469,7 +630,7 @@ export class BotApp {
       return "Налаштування ще не створені."
     }
 
-    const categoryText = this.formatter.formatCategoryLabel(user.category)
+    const categoryText = this.formatter.formatCategoryLabel(user.categories)
     const expText = user.expLevels.length
       ? user.expLevels.map((level) => this.formatter.expLabel(level)).join(", ")
       : "будь-який (без фільтра)"
@@ -501,55 +662,57 @@ export class BotApp {
   }
 
   private buildCategoryKeyboard(page: number, chatId: number): InlineKeyboard {
-    const totalPages = Math.ceil(DJINNI_CATEGORIES.length / this.categoryPageSize)
-    const clampedPage = Math.min(Math.max(page, 0), Math.max(totalPages - 1, 0))
-    const selectedCategory = this.settingsRepository.getUser(chatId)?.category
-
-    const start = clampedPage * this.categoryPageSize
-    const end = Math.min(start + this.categoryPageSize, DJINNI_CATEGORIES.length)
+    const { totalPages, currentPage, start, end } = this.getCategoryPageState(page)
+    const selectedCategories = this.getCategoryDraft(chatId)
+    const allSelected = selectedCategories.has(ALL_CATEGORIES_VALUE)
 
     const keyboard = new InlineKeyboard()
-    const allPrefix = selectedCategory === ALL_CATEGORIES_VALUE ? "✅ " : ""
+    const allPrefix = allSelected ? "✅ " : "☑️ "
     keyboard.text(`${allPrefix}${ALL_CATEGORIES_LABEL}`, "cat:set_all").row()
 
-    for (let index = start; index < end; index += 2) {
-      keyboard.text(DJINNI_CATEGORIES[index], `cat:set:${index}`)
-      if (index + 1 < end) {
-        keyboard.text(DJINNI_CATEGORIES[index + 1], `cat:set:${index + 1}`)
-      }
+    for (let index = start; index < end; index += 1) {
+      const category = DJINNI_CATEGORIES[index]
+      const checked = !allSelected && selectedCategories.has(category) ? "✅" : "☑️"
+      keyboard.text(`${checked} ${category}`, `cat:set:${index}`)
       keyboard.row()
     }
 
     if (totalPages > 1) {
-      if (clampedPage > 0) {
-        keyboard.text("⬅️", `cat:page:${clampedPage - 1}`)
+      if (currentPage > 0) {
+        keyboard.text("⬅️", `cat:page:${currentPage - 1}`)
       }
-      keyboard.text(`${clampedPage + 1}/${totalPages}`, "noop")
-      if (clampedPage < totalPages - 1) {
-        keyboard.text("➡️", `cat:page:${clampedPage + 1}`)
+      keyboard.text(`${currentPage + 1}/${totalPages}`, "noop")
+      if (currentPage < totalPages - 1) {
+        keyboard.text("➡️", `cat:page:${currentPage + 1}`)
       }
       keyboard.row()
     }
 
-    keyboard.text("⬅️ До налаштувань", "menu:settings")
+    keyboard
+      .text("Очистити", "cat:clear")
+      .text("💾 Зберегти", "cat:save")
+      .row()
+      .text("⬅️ До налаштувань", "menu:settings")
+
     return keyboard
   }
 
   private buildCategoryText(page: number, chatId: number): string {
-    const totalPages = Math.ceil(DJINNI_CATEGORIES.length / this.categoryPageSize)
-    const currentPage = Math.min(Math.max(page, 0), Math.max(totalPages - 1, 0))
-    const user = this.settingsRepository.getUser(chatId)
-    const selected = this.formatter.formatCategoryLabel(user?.category ?? null)
+    const { totalPages, currentPage } = this.getCategoryPageState(page)
+    const selected = this.formatter.formatCategoryLabel(
+      this.sortCategories(this.getCategoryDraft(chatId))
+    )
 
     return [
-      "<b>Оберіть категорію</b>",
-      `Поточна: <b>${this.formatter.escapeHtml(selected)}</b>`,
-      `Сторінка: ${currentPage + 1}/${Math.max(totalPages, 1)}`
+      "<b>Оберіть категорії</b>",
+      "Можна вибрати кілька значень.",
+      `Вибрано: <b>${this.formatter.escapeHtml(selected)}</b>`,
+      `Сторінка: ${currentPage + 1}/${totalPages}`
     ].join("\n")
   }
 
   private buildExpKeyboard(chatId: number): InlineKeyboard {
-    const selected = this.getDraft(chatId)
+    const selected = this.getExpDraft(chatId)
     const keyboard = new InlineKeyboard()
 
     for (let index = 0; index < EXP_LEVELS.length; index += 2) {
@@ -578,7 +741,7 @@ export class BotApp {
   }
 
   private buildExpText(chatId: number): string {
-    const selected = this.sortExpLevels(this.getDraft(chatId))
+    const selected = this.sortExpLevels(this.getExpDraft(chatId))
     const selectedLabels = selected.length
       ? selected.map((level) => this.formatter.expLabel(level)).join(", ")
       : "будь-який (без фільтра)"
@@ -592,14 +755,13 @@ export class BotApp {
 
   private async refreshLastPublication(chatId: number): Promise<void> {
     const user = this.settingsRepository.getUser(chatId)
-    if (!user?.category) {
+    if (!user || user.categories.length === 0) {
       return
     }
 
     try {
-      const rssCategory = this.categoryForRss(user.category)
-      const rssUrl = this.rssFeedService.buildRssUrl(rssCategory, user.expLevels)
-      const jobs = await this.rssFeedService.fetchJobs(rssCategory, user.expLevels)
+      const rssUrls = this.rssFeedService.buildRssUrls(user.categories, user.expLevels)
+      const jobs = await this.rssFeedService.fetchJobsForCategories(user.categories, user.expLevels)
       const latestLink = this.getLatestLink(jobs)
 
       if (latestLink) {
@@ -607,7 +769,7 @@ export class BotApp {
       }
 
       this.logger.info(
-        `prime chat=${chatId} url=${rssUrl} jobs=${jobs.length} latest_link=${latestLink ?? "none"}`
+        `prime chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} latest_link=${latestLink ?? "none"}`
       )
     } catch (error) {
       this.logger.error(`Prime feed failed for chat ${chatId}: ${error}`)
@@ -616,17 +778,18 @@ export class BotApp {
 
   private async processUserFeed(chatId: number): Promise<number> {
     const user = this.settingsRepository.getUser(chatId)
-    if (!user || !user.isActive || !user.category) {
+    if (!user || !user.isActive || user.categories.length === 0) {
       return 0
     }
 
-    const rssCategory = this.categoryForRss(user.category)
-    const rssUrl = this.rssFeedService.buildRssUrl(rssCategory, user.expLevels)
-    const jobs = await this.rssFeedService.fetchJobs(rssCategory, user.expLevels)
+    const rssUrls = this.rssFeedService.buildRssUrls(user.categories, user.expLevels)
+    const jobs = await this.rssFeedService.fetchJobsForCategories(user.categories, user.expLevels)
     const latestLink = this.getLatestLink(jobs)
 
     if (!latestLink) {
-      this.logger.info(`poll chat=${chatId} url=${rssUrl} jobs=0 latest_link=none sent=0`)
+      this.logger.info(
+        `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=0 latest_link=none sent=0`
+      )
       return 0
     }
 
@@ -634,7 +797,7 @@ export class BotApp {
     if (!previousLink) {
       this.settingsRepository.setLastJobLink(chatId, latestLink)
       this.logger.info(
-        `poll chat=${chatId} init url=${rssUrl} jobs=${jobs.length} latest_link=${latestLink}`
+        `poll chat=${chatId} init urls=${rssUrls.join(",")} jobs=${jobs.length} latest_link=${latestLink}`
       )
       return 0
     }
@@ -642,7 +805,7 @@ export class BotApp {
     const anchorIndex = jobs.findIndex((job) => this.normalizeLink(job.link) === previousLink)
     if (anchorIndex === 0) {
       this.logger.info(
-        `poll chat=${chatId} url=${rssUrl} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} sent=0`
+        `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} sent=0`
       )
       return 0
     }
@@ -650,7 +813,7 @@ export class BotApp {
     if (anchorIndex === -1) {
       this.settingsRepository.setLastJobLink(chatId, latestLink)
       this.logger.info(
-        `poll chat=${chatId} url=${rssUrl} anchor_missing previous_link=${previousLink} latest_link=${latestLink} jobs=${jobs.length} sent=0`
+        `poll chat=${chatId} urls=${rssUrls.join(",")} anchor_missing previous_link=${previousLink} latest_link=${latestLink} jobs=${jobs.length} sent=0`
       )
       return 0
     }
@@ -675,7 +838,7 @@ export class BotApp {
 
     this.settingsRepository.setLastJobLink(chatId, latestLink)
     this.logger.info(
-      `poll chat=${chatId} url=${rssUrl} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} new_jobs=${newJobs.length} sent=${sent}`
+      `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} new_jobs=${newJobs.length} sent=${sent}`
     )
 
     return sent

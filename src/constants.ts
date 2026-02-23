@@ -167,3 +167,5 @@ export type ExpLevelId = (typeof EXP_LEVELS)[number]["id"]
 
 export const ALL_CATEGORIES_VALUE = "__ALL__"
 export const ALL_CATEGORIES_LABEL = "Всі категорії"
+
+export const CATEGORY_PAGE_SIZE = 10

@@ -14,7 +14,6 @@ if (!token) {
 }
 
 const pollIntervalMs = Number.parseInt(process.env.POLL_INTERVAL_MS ?? "180000", 10)
-const categoryPageSize = 12
 
 const container = createContainer({
   injectionMode: InjectionMode.PROXY
@@ -23,7 +22,6 @@ const container = createContainer({
 container.register({
   bot: asValue(new Bot(token)),
   pollIntervalMs: asValue(pollIntervalMs),
-  categoryPageSize: asValue(categoryPageSize),
   logger: asClass(Logger).singleton(),
   settingsRepository: asClass(SettingsRepository).singleton(),
   rssFeedService: asClass(RssFeedService).singleton(),

@@ -2,7 +2,7 @@ import Database from "better-sqlite3"
 import path from "node:path"
 
 import type { IUser } from "@/models"
-import type { ExpLevelId } from "../constants"
+import { ALL_CATEGORIES_VALUE, type ExpLevelId } from "../constants"
 
 interface IUserRow {
   chat_id: number
@@ -96,11 +96,13 @@ export class SettingsRepository {
 
   public getConfiguredUsers(): IUser[] {
     const rows = this.configuredUsersStmt.all() as IUserRow[]
-    return rows.map((row) => this.mapUser(row)).filter((user) => user.category)
+    return rows.map((row) => this.mapUser(row)).filter((user) => user.categories.length > 0)
   }
 
-  public saveCategory(chatId: number, category: string): void {
-    this.upsertCategoryStmt.run(chatId, category)
+  public saveCategories(chatId: number, categories: string[]): void {
+    const normalized = this.normalizeCategories(categories)
+    const payload = normalized.length > 0 ? JSON.stringify(normalized) : null
+    this.upsertCategoryStmt.run(chatId, payload)
   }
 
   public saveExpLevels(chatId: number, expLevels: ExpLevelId[]): void {
@@ -127,14 +129,54 @@ export class SettingsRepository {
       parsedLevels = []
     }
 
+    const categories = this.parseCategories(row.category)
+
     return {
       chatId: row.chat_id,
-      category: row.category,
+      categories,
       expLevels: parsedLevels,
       isActive: row.is_active === 1,
       lastJobLink: row.last_job_link,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }
+  }
+
+  private parseCategories(rawValue: string | null): string[] {
+    if (!rawValue) {
+      return []
+    }
+
+    try {
+      const parsed = JSON.parse(rawValue) as unknown
+      if (Array.isArray(parsed)) {
+        const categories = parsed.filter((value): value is string => typeof value === "string")
+        return this.normalizeCategories(categories)
+      }
+
+      if (typeof parsed === "string") {
+        return this.normalizeCategories([parsed])
+      }
+    } catch {
+      // Fallback for legacy rows where category was stored as plain text.
+    }
+
+    return this.normalizeCategories([rawValue])
+  }
+
+  private normalizeCategories(categories: Iterable<string>): string[] {
+    const normalized = Array.from(
+      new Set(
+        Array.from(categories)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    )
+
+    if (normalized.includes(ALL_CATEGORIES_VALUE)) {
+      return [ALL_CATEGORIES_VALUE]
+    }
+
+    return normalized
   }
 }

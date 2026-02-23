@@ -2,7 +2,7 @@ import type { ExpLevelId } from "../constants"
 
 export interface IUser {
   chatId: number
-  category: string | null
+  categories: string[]
   expLevels: ExpLevelId[]
   isActive: boolean
   lastJobLink: string | null

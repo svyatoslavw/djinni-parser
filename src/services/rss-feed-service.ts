@@ -32,6 +32,12 @@ export class RssFeedService {
     return url.toString()
   }
 
+  public buildRssUrls(categories: string[], expLevels: ExpLevelId[]): string[] {
+    return this.categoriesForRequests(categories).map((category) =>
+      this.buildRssUrl(category, expLevels)
+    )
+  }
+
   public async fetchJobs(category: string | null, expLevels: ExpLevelId[]): Promise<DjinniJob[]> {
     const url = this.buildRssUrl(category, expLevels)
     const response = await fetch(url, {
@@ -73,12 +79,59 @@ export class RssFeedService {
       .filter((item) => item.guid && item.link)
   }
 
+  public async fetchJobsForCategories(
+    categories: string[],
+    expLevels: ExpLevelId[]
+  ): Promise<DjinniJob[]> {
+    const requestCategories = this.categoriesForRequests(categories)
+    if (requestCategories.length === 0) {
+      return []
+    }
+
+    const jobsByCategory = await Promise.all(
+      requestCategories.map((category) => this.fetchJobs(category, expLevels))
+    )
+
+    const uniqueByLink = new Map<string, DjinniJob>()
+    for (const job of jobsByCategory.flat()) {
+      const key = this.normalizeLink(job.link)
+      if (!uniqueByLink.has(key)) {
+        uniqueByLink.set(key, job)
+      }
+    }
+
+    return Array.from(uniqueByLink.values()).sort(
+      (left, right) => this.toTimestamp(right.pubDate) - this.toTimestamp(left.pubDate)
+    )
+  }
+
   private toArray<T>(value: T | T[] | undefined): T[] {
     if (!value) {
       return []
     }
 
     return Array.isArray(value) ? value : [value]
+  }
+
+  private categoriesForRequests(categories: string[]): Array<string | null> {
+    if (categories.length === 0) {
+      return []
+    }
+
+    if (categories.includes(ALL_CATEGORIES_VALUE)) {
+      return [null]
+    }
+
+    return categories
+  }
+
+  private normalizeLink(link: string): string {
+    return link.trim().replace(/\/$/, "")
+  }
+
+  private toTimestamp(pubDate: string): number {
+    const parsed = new Date(pubDate)
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime()
   }
 
   private stripHtml(input: string): string {
