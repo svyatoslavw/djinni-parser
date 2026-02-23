@@ -182,7 +182,7 @@ export class BotApp {
       this.settingsRepository.saveCategory(chatId, ALL_CATEGORIES_VALUE)
       await ctx.answerCallbackQuery({ text: `Категорія: ${ALL_CATEGORIES_LABEL}` })
 
-      await this.primeCurrentFeed(chatId)
+      await this.refreshLastPublication(chatId)
       await this.renderSettings(ctx)
     })
 
@@ -208,7 +208,7 @@ export class BotApp {
         text: `Категорія: ${this.formatter.formatCategoryLabel(category)}`
       })
 
-      await this.primeCurrentFeed(chatId)
+      await this.refreshLastPublication(chatId)
       await this.renderSettings(ctx)
     })
 
@@ -296,7 +296,7 @@ export class BotApp {
       this.expDrafts.delete(chatId)
 
       if (this.hasFullSettings(chatId)) {
-        await this.primeCurrentFeed(chatId)
+        await this.refreshLastPublication(chatId)
       }
 
       await ctx.answerCallbackQuery({
@@ -590,7 +590,7 @@ export class BotApp {
     ].join("\n")
   }
 
-  private async primeCurrentFeed(chatId: number): Promise<void> {
+  private async refreshLastPublication(chatId: number): Promise<void> {
     const user = this.settingsRepository.getUser(chatId)
     if (!user?.category) {
       return
