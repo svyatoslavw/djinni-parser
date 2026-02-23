@@ -36,6 +36,17 @@ npm start
 - `/start` - старт і первинний вибір категорії/досвіду
 - `/settings` - зміна категорії, років досвіду, пауза/активація
 
+## Архітектура
+
+- OOP + DI через `awilix`
+- Composition root: `/Users/sviatoslav/Documents/Projects/djinni-parser/src/main.ts`
+- Класи:
+  - `/Users/sviatoslav/Documents/Projects/djinni-parser/src/app/bot-app.ts`
+  - `/Users/sviatoslav/Documents/Projects/djinni-parser/src/repositories/settings-repository.ts`
+  - `/Users/sviatoslav/Documents/Projects/djinni-parser/src/services/rss-feed-service.ts`
+  - `/Users/sviatoslav/Documents/Projects/djinni-parser/src/services/ui-formatter.ts`
+  - `/Users/sviatoslav/Documents/Projects/djinni-parser/src/services/app-logger.ts`
+
 ## Логіка роботи
 
 1. На старті користувач вибирає категорію через `inline_keyboard` (з пагінацією).

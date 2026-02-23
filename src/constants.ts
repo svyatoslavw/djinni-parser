@@ -147,7 +147,7 @@ export const DJINNI_CATEGORIES = [
   "WPF",
   "Xamarin",
   "Yii"
-] as const;
+] as const
 
 export const EXP_LEVELS = [
   { id: "no_exp", label: "Без досвіду" },
@@ -161,9 +161,9 @@ export const EXP_LEVELS = [
   { id: "8y", label: "8 років" },
   { id: "9y", label: "9 років" },
   { id: "10y", label: "10 років" }
-] as const;
+] as const
 
-export type ExpLevelId = (typeof EXP_LEVELS)[number]["id"];
+export type ExpLevelId = (typeof EXP_LEVELS)[number]["id"]
 
-export const ALL_CATEGORIES_VALUE = "__ALL__";
-export const ALL_CATEGORIES_LABEL = "Всі категорії";
+export const ALL_CATEGORIES_VALUE = "__ALL__"
+export const ALL_CATEGORIES_LABEL = "Всі категорії"
