@@ -1,0 +1,27 @@
+{
+  "name": "djinni-parser-bot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Telegram bot for parsing Djinni RSS feeds and sending jobs to chats",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsup src/main.ts --watch --onSuccess='node dist/main.js'",
+    "build": "tsup",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "fast-xml-parser": "^5.0.8",
+    "grammy": "^1.36.3",
+    "html-entities": "^2.5.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.10",
+    "tsup": "^8.5.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
