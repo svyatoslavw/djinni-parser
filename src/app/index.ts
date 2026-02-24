@@ -1,2 +1,2 @@
-export * from "./bot-app"
+export * from "./bot-application"
 export * from "./processes"

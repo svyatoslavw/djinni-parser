@@ -5,10 +5,21 @@
   "description": "Telegram bot for parsing Djinni RSS feeds and sending jobs to chats",
   "main": "dist/main.js",
   "scripts": {
-    "dev": "tsup src/main.ts --watch --onSuccess='node dist/main.js' | pino-pretty --colorize",
+    "dev": "tsup --watch --onSuccess='node dist/main.js' | pino-pretty --colorize",
     "build": "tsup",
     "start": "node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "docker:build": "docker build -t djinni-parser-bot:local .",
+    "docker:up": "mkdir -p data && (docker rm -f djinni-parser-bot >/dev/null 2>&1 || true) && docker run -d --name djinni-parser-bot --restart unless-stopped --env-file .env -e DATABASE_PATH=/app/data/data.sqlite -v \"$(pwd)/data:/app/data\" djinni-parser-bot:local",
+    "docker:run": "mkdir -p data && docker run --rm --name djinni-parser-bot --env-file .env -e DATABASE_PATH=/app/data/data.sqlite -v \"$(pwd)/data:/app/data\" djinni-parser-bot:local",
+    "docker:down": "docker rm -f djinni-parser-bot",
+    "docker:start": "docker start djinni-parser-bot",
+    "docker:stop": "docker stop djinni-parser-bot",
+    "docker:restart": "docker restart djinni-parser-bot",
+    "docker:logs": "docker logs -f djinni-parser-bot",
+    "docker:ps": "docker ps -a --filter name=djinni-parser-bot",
+    "docker:sh": "docker exec -it djinni-parser-bot sh",
+    "docker:rebuild": "npm run docker:build && npm run docker:up"
   },
   "dependencies": {
     "awilix": "^10.0.2",

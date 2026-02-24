@@ -27,7 +27,7 @@ interface CategoryPageState {
   end: number
 }
 
-export class BotApp {
+export class BotApplication {
   private readonly expDrafts = new Map<number, Set<ExpLevelId>>()
   private readonly categoryDrafts = new Map<number, Set<string>>()
 

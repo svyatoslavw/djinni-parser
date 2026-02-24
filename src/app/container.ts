@@ -3,8 +3,8 @@ import { FeedPollerService, RssFeedService } from "@/services"
 import { Formatter, Logger } from "@/utils"
 import { asClass, asValue, createContainer, InjectionMode } from "awilix"
 import { Bot } from "grammy"
-import { BotApp } from "."
 import { TELEGRAM_BOT_TOKEN } from "../common"
+import { BotApplication } from "./bot-application"
 
 export const createBaseContainer = () => {
   const container = createContainer({ injectionMode: InjectionMode.PROXY })
@@ -25,7 +25,7 @@ export const createBotContainer = () => {
   const container = createBaseContainer()
   container.register({
     bot: asValue(new Bot(TELEGRAM_BOT_TOKEN)),
-    botApp: asClass(BotApp).singleton()
+    botApplication: asClass(BotApplication).singleton()
   })
   return container
 }

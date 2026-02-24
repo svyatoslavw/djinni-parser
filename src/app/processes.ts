@@ -2,7 +2,7 @@ import { ChildProcess, fork } from "child_process"
 import { POLL_INTERVAL_MS, WORKER_RESTART_DELAY_MS } from "../common"
 import { FeedPollerService } from "../services"
 import { Logger } from "../utils"
-import { BotApp } from "./bot-app"
+import { BotApplication } from "./bot-application"
 import { createBaseContainer, createBotContainer } from "./container"
 
 // ==================================================================== //
@@ -71,7 +71,7 @@ export class BotProcess {
   async start(): Promise<void> {
     this.setupExitHandler()
     this.spawn()
-    this.container.resolve<BotApp>("botApp").start()
+    this.container.resolve<BotApplication>("botApplicationp").start()
   }
 
   private setupExitHandler(): void {
