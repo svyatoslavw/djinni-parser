@@ -1,4 +1,4 @@
-export interface DjinniJob {
+export interface IJob {
   guid: string
   title: string
   link: string

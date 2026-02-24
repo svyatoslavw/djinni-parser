@@ -1,8 +1,7 @@
 import { GrammyError, HttpError, InlineKeyboard, type Bot, type Context } from "grammy"
 
-import type { DjinniJob } from "@/models"
 import { SettingsRepository } from "@/repositories"
-import { RssFeedService } from "@/services"
+import { FeedPollerService } from "@/services"
 import { Formatter, Logger } from "@/utils"
 import {
   ALL_CATEGORIES_LABEL,
@@ -11,15 +10,14 @@ import {
   DJINNI_CATEGORIES,
   EXP_LEVELS,
   type ExpLevelId
-} from "../constants"
+} from "../common/constants"
 
 interface BotAppDependencies {
   bot: Bot
   logger: Logger
   settingsRepository: SettingsRepository
-  rssFeedService: RssFeedService
+  feedPollerService: FeedPollerService
   formatter: Formatter
-  pollIntervalMs: number
 }
 
 interface CategoryPageState {
@@ -32,44 +30,34 @@ interface CategoryPageState {
 export class BotApp {
   private readonly expDrafts = new Map<number, Set<ExpLevelId>>()
   private readonly categoryDrafts = new Map<number, Set<string>>()
-  private pollIsRunning = false
 
   private readonly bot: Bot
   private readonly logger: Logger
   private readonly settingsRepository: SettingsRepository
-  private readonly rssFeedService: RssFeedService
+  private readonly feedPollerService: FeedPollerService
   private readonly formatter: Formatter
-  private readonly pollIntervalMs: number
 
   public constructor({
     bot,
     logger,
     settingsRepository,
-    rssFeedService,
-    formatter,
-    pollIntervalMs
+    feedPollerService,
+    formatter
   }: BotAppDependencies) {
     this.bot = bot
     this.logger = logger
     this.settingsRepository = settingsRepository
-    this.rssFeedService = rssFeedService
+    this.feedPollerService = feedPollerService
     this.formatter = formatter
-    this.pollIntervalMs = pollIntervalMs
   }
 
   public start(): void {
     this.registerHandlers()
     this.registerErrorHandler()
 
-    setInterval(() => {
-      void this.pollAllUsers()
-    }, this.pollIntervalMs)
-
-    void this.pollAllUsers()
-
     this.bot.start({
       onStart: ({ username }) => {
-        this.logger.info(`Bot @${username} started. Poll interval: ${this.pollIntervalMs}ms`)
+        this.logger.info(`Bot @${username} started`)
       }
     })
   }
@@ -183,7 +171,7 @@ export class BotApp {
     await ctx.answerCallbackQuery({ text: "Перевіряю RSS..." })
 
     try {
-      const sentCount = await this.processUserFeed(chatId)
+      const sentCount = await this.feedPollerService.processUserFeed(chatId)
       await ctx.reply(
         sentCount > 0 ? `Надіслано вакансій: ${sentCount}` : "Нових вакансій поки немає."
       )
@@ -304,7 +292,7 @@ export class BotApp {
     this.categoryDrafts.delete(chatId)
 
     if (this.hasFullSettings(chatId)) {
-      await this.refreshLastPublication(chatId)
+      await this.feedPollerService.refreshLastPublication(chatId)
     }
 
     await ctx.answerCallbackQuery({
@@ -402,7 +390,7 @@ export class BotApp {
     this.expDrafts.delete(chatId)
 
     if (this.hasFullSettings(chatId)) {
-      await this.refreshLastPublication(chatId)
+      await this.feedPollerService.refreshLastPublication(chatId)
     }
 
     await ctx.answerCallbackQuery({
@@ -441,10 +429,6 @@ export class BotApp {
 
       this.logger.error(JSON.stringify(e))
     })
-  }
-
-  private normalizeLink(link: string): string {
-    return link.trim().replace(/\/$/, "")
   }
 
   private getChatId(ctx: Context): number | null {
@@ -535,11 +519,6 @@ export class BotApp {
     }
 
     return 0
-  }
-
-  private getLatestLink(jobs: DjinniJob[]): string | null {
-    const link = jobs[0]?.link
-    return link ? this.normalizeLink(link) : null
   }
 
   private getCategoryPageState(page: number): CategoryPageState {
@@ -751,121 +730,5 @@ export class BotApp {
       "Можна вибрати кілька значень.",
       `Вибрано: <b>${this.formatter.escapeHtml(selectedLabels)}</b>`
     ].join("\n")
-  }
-
-  private async refreshLastPublication(chatId: number): Promise<void> {
-    const user = this.settingsRepository.getUser(chatId)
-    if (!user || user.categories.length === 0) {
-      return
-    }
-
-    try {
-      const rssUrls = this.rssFeedService.buildRssUrls(user.categories, user.expLevels)
-      const jobs = await this.rssFeedService.fetchJobsForCategories(user.categories, user.expLevels)
-      const latestLink = this.getLatestLink(jobs)
-
-      if (latestLink) {
-        this.settingsRepository.setLastJobLink(chatId, latestLink)
-      }
-
-      this.logger.info(
-        `prime chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} latest_link=${latestLink ?? "none"}`
-      )
-    } catch (error) {
-      this.logger.error(`Prime feed failed for chat ${chatId}: ${error}`)
-    }
-  }
-
-  private async processUserFeed(chatId: number): Promise<number> {
-    const user = this.settingsRepository.getUser(chatId)
-    if (!user || !user.isActive || user.categories.length === 0) {
-      return 0
-    }
-
-    const rssUrls = this.rssFeedService.buildRssUrls(user.categories, user.expLevels)
-    const jobs = await this.rssFeedService.fetchJobsForCategories(user.categories, user.expLevels)
-    const latestLink = this.getLatestLink(jobs)
-
-    if (!latestLink) {
-      this.logger.info(
-        `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=0 latest_link=none sent=0`
-      )
-      return 0
-    }
-
-    const previousLink = user.lastJobLink ? this.normalizeLink(user.lastJobLink) : null
-    if (!previousLink) {
-      this.settingsRepository.setLastJobLink(chatId, latestLink)
-      this.logger.info(
-        `poll chat=${chatId} init urls=${rssUrls.join(",")} jobs=${jobs.length} latest_link=${latestLink}`
-      )
-      return 0
-    }
-
-    const anchorIndex = jobs.findIndex((job) => this.normalizeLink(job.link) === previousLink)
-    if (anchorIndex === 0) {
-      this.logger.info(
-        `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} sent=0`
-      )
-      return 0
-    }
-
-    if (anchorIndex === -1) {
-      this.settingsRepository.setLastJobLink(chatId, latestLink)
-      this.logger.info(
-        `poll chat=${chatId} urls=${rssUrls.join(",")} anchor_missing previous_link=${previousLink} latest_link=${latestLink} jobs=${jobs.length} sent=0`
-      )
-      return 0
-    }
-
-    const newJobs = jobs.slice(0, anchorIndex).reverse()
-    let sent = 0
-
-    for (const job of newJobs) {
-      try {
-        await this.bot.api.sendMessage(chatId, this.formatter.formatJobMessage(job), {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true }
-        })
-        sent += 1
-      } catch (error) {
-        if (error instanceof GrammyError && error.error_code === 403) {
-          this.settingsRepository.setUserActive(chatId, false)
-        }
-        throw error
-      }
-    }
-
-    this.settingsRepository.setLastJobLink(chatId, latestLink)
-    this.logger.info(
-      `poll chat=${chatId} urls=${rssUrls.join(",")} jobs=${jobs.length} previous_link=${previousLink} latest_link=${latestLink} new_jobs=${newJobs.length} sent=${sent}`
-    )
-
-    return sent
-  }
-
-  private async pollAllUsers(): Promise<void> {
-    if (this.pollIsRunning) {
-      this.logger.info("poll tick skipped: previous cycle is still running")
-      return
-    }
-
-    this.pollIsRunning = true
-    try {
-      const users = this.settingsRepository.getConfiguredUsers()
-      this.logger.info(`poll tick started: users=${users.length}`)
-
-      for (const user of users) {
-        try {
-          await this.processUserFeed(user.chatId)
-        } catch (error) {
-          this.logger.error(`Polling failed for chat ${user.chatId}: ${error}`)
-        }
-      }
-
-      this.logger.info("poll tick finished")
-    } finally {
-      this.pollIsRunning = false
-    }
   }
 }

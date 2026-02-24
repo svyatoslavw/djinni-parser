@@ -7,11 +7,7 @@ export class Logger {
     this.logger = logger({
       transport: {
         target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "SYS:HH:MM:ss.l",
-          ignore: "pid,hostname"
-        }
+        options: { colorize: true, translateTime: "SYS:HH:MM:ss.l", ignore: "pid,hostname" }
       }
     })
   }

@@ -1,8 +1,8 @@
 import { XMLParser } from "fast-xml-parser"
 import { decode } from "html-entities"
 
-import type { DjinniJob } from "@/models"
-import { ALL_CATEGORIES_VALUE, type ExpLevelId } from "../constants"
+import type { IJob } from "@/models"
+import { ALL_CATEGORIES_VALUE, type ExpLevelId } from "../common/constants"
 
 interface RssItem {
   title?: string
@@ -38,7 +38,7 @@ export class RssFeedService {
     )
   }
 
-  public async fetchJobs(category: string | null, expLevels: ExpLevelId[]): Promise<DjinniJob[]> {
+  public async fetchJobs(category: string | null, expLevels: ExpLevelId[]): Promise<IJob[]> {
     const url = this.buildRssUrl(category, expLevels)
     const response = await fetch(url, {
       headers: {
@@ -74,7 +74,7 @@ export class RssFeedService {
           descriptionText: this.stripHtml(item.description ?? ""),
           pubDate: item.pubDate ?? "",
           category: this.normalizeCategory(item.category)
-        } satisfies DjinniJob
+        } satisfies IJob
       })
       .filter((item) => item.guid && item.link)
   }
@@ -82,7 +82,7 @@ export class RssFeedService {
   public async fetchJobsForCategories(
     categories: string[],
     expLevels: ExpLevelId[]
-  ): Promise<DjinniJob[]> {
+  ): Promise<IJob[]> {
     const requestCategories = this.categoriesForRequests(categories)
     if (requestCategories.length === 0) {
       return []
@@ -92,7 +92,7 @@ export class RssFeedService {
       requestCategories.map((category) => this.fetchJobs(category, expLevels))
     )
 
-    const uniqueByLink = new Map<string, DjinniJob>()
+    const uniqueByLink = new Map<string, IJob>()
     for (const job of jobsByCategory.flat()) {
       const key = this.normalizeLink(job.link)
       if (!uniqueByLink.has(key)) {

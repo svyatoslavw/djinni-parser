@@ -2,7 +2,7 @@ import Database from "better-sqlite3"
 import path from "node:path"
 
 import type { IUser } from "@/models"
-import { ALL_CATEGORIES_VALUE, type ExpLevelId } from "../constants"
+import { ALL_CATEGORIES_VALUE, type ExpLevelId } from "../common/constants"
 
 interface IUserRow {
   chat_id: number
@@ -143,9 +143,7 @@ export class SettingsRepository {
   }
 
   private parseCategories(rawValue: string | null): string[] {
-    if (!rawValue) {
-      return []
-    }
+    if (!rawValue) return []
 
     try {
       const parsed = JSON.parse(rawValue) as unknown
@@ -157,9 +155,7 @@ export class SettingsRepository {
       if (typeof parsed === "string") {
         return this.normalizeCategories([parsed])
       }
-    } catch {
-      // Fallback for legacy rows where category was stored as plain text.
-    }
+    } catch {}
 
     return this.normalizeCategories([rawValue])
   }

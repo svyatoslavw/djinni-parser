@@ -1,10 +1,10 @@
-import type { DjinniJob } from "@/models"
+import type { IJob } from "@/models"
 import {
   ALL_CATEGORIES_LABEL,
   ALL_CATEGORIES_VALUE,
   EXP_LEVELS,
   type ExpLevelId
-} from "../constants"
+} from "../common/constants"
 
 export class Formatter {
   private readonly dateFormatter = new Intl.DateTimeFormat("uk-UA", {
@@ -62,7 +62,7 @@ export class Formatter {
     return this.dateFormatter.format(parsedDate)
   }
 
-  public formatJobMessage(job: DjinniJob): string {
+  public formatJobMessage(job: IJob): string {
     const snippet = this.truncate(job.descriptionText, 420)
 
     return [

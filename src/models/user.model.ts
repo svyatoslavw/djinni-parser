@@ -1,4 +1,4 @@
-import type { ExpLevelId } from "../constants"
+import type { ExpLevelId } from "../common/constants"
 
 export interface IUser {
   chatId: number
