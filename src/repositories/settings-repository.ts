@@ -26,9 +26,7 @@ export class SettingsRepository {
   private readonly configuredUsersStmt: Database.Statement
 
   public constructor() {
-    const databasePath = process.env.DATABASE_PATH
-      ? path.resolve(process.env.DATABASE_PATH)
-      : path.resolve("./data.sqlite")
+    const databasePath = path.resolve("./data/data.sqlite")
 
     this.db = new Database(databasePath)
     this.db.pragma("journal_mode = WAL")

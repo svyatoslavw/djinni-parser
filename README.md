@@ -29,7 +29,7 @@ npm start
 
 - `TELEGRAM_BOT_TOKEN` (обов'язково)
 - `POLL_INTERVAL_MS` (опційно, за замовчуванням `180000`)
-- `DATABASE_PATH` (опційно, за замовчуванням `./data.sqlite`)
+- `DATABASE_PATH` (опційно, за замовчуванням `./data/data.sqlite`)
 
 ## Команди в боті
 

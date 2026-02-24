@@ -71,7 +71,7 @@ export class BotProcess {
   async start(): Promise<void> {
     this.setupExitHandler()
     this.spawn()
-    this.container.resolve<BotApplication>("botApplicationp").start()
+    this.container.resolve<BotApplication>("botApplication").start()
   }
 
   private setupExitHandler(): void {
